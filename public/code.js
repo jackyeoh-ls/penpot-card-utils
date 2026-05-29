@@ -333,6 +333,7 @@ const Sync = {
     let changed = 0;
     
     console.log(`textShapes: `, textShapes);
+    console.log(`textMap`, textMap);
     for (const ts of textShapes) {
       console.log(`ts: `, ts);
       console.log(`ts.name: `, ts.name);
