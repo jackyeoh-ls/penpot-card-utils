@@ -294,10 +294,12 @@
     // window.parent.postMessage. The plugin API wraps this, but in the HTML
     // panel we use the standard approach for compatibility.
     function sendToPlugin(msg) {
+      console.log(`window parent postMessage: `, msg);
       window.parent.postMessage(msg, '*');
     }
 
     window.addEventListener('message', async (event) => {
+      console.log(`window "message" event: `, event);
       // Penpot delivers plugin messages as event.data directly
       const msg = event.data;
       if (!msg || !msg.type) return;
