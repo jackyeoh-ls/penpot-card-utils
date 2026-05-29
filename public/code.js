@@ -1,28 +1,30 @@
 /**
  * CARD EXPORTER — PENPOT PLUGIN (code.js)
  *
- * Penpot plugin API key facts (verified from official docs):
+ * Verified Penpot Plugin API:
  *  - penpot.ui.open(name, url, {width, height})
- *  - penpot.ui.sendMessage(msg)  /  penpot.ui.onMessage(callback)
- *  - penpot.currentPage  → current Page object
- *  - penpot.currentFile  → File object with .pages[] array
- *  - page.id, page.name, page.children[] (top-level shapes)
- *  - shape.name, shape.type, shape.children[], shape.x, shape.y, shape.parent
- *  - shape.export({ type: 'png', scale: 1 }) → Promise<Uint8Array>
- *  - shape.clone() → Shape,  shape.remove()
- *  - Text shape: shape.type === 'text', shape.characters (plain string)
- *  - shape.content = rich-text tree (paragraphs → spans with fontWeight etc.)
- *  - penpot.localStorage.setItem(key, value) / .getItem(key) — requires allow:localstorage
- *  - NO penpot.getPage(), NO penpot.root, NO penpot.clientStorage
+ *  - penpot.ui.sendMessage(msg) / penpot.ui.onMessage(callback)
+ *  - penpot.currentPage  → Page (has .id, .name, .children[], .findShapes(criteria))
+ *  - penpot.currentFile  → File (.pages[] — Page objects)
+ *  - page.findShapes({})  → Shape[] (all shapes on page, all depths)
+ *  - page.findShapes({ name: 'foo' }) → Shape[] filtered by name
+ *  - shape.name, shape.type, shape.children[], shape.x, shape.y, shape.width, shape.height
+ *  - shape.export({ type:'png', scale:1 }) → Promise<Uint8Array>
+ *  - shape.clone() → Shape  (inserted on the SAME page as source — cross-page clone not possible)
+ *  - shape.remove()
+ *  - shape.characters (text shapes only — plain string)
+ *  - shape.content    (text shapes only — rich-text tree for bold detection)
+ *  - penpot.localStorage.setItem(key, val) / .getItem(key)  [allow:localstorage]
+ *  - penpot.library.local.components[]  [library:read]
+ *  - LibraryComponent.instantiate() → inserts instance on currentPage
  */
 
 // ============================================================================
 // 1. CONFIGURATION
 // ============================================================================
 const CONFIG = {
-  DEFAULT_SEARCH_DEPTH: 3,
-  IMG_BASE_URL: "https://tcg-arena-ccg.vercel.app/img",
-  STORAGE_KEY: "card_exporter_cache"
+  IMG_BASE_URL: 'https://tcg-arena-ccg.vercel.app/img',
+  STORAGE_KEY:  'card_exporter_cache'
 };
 
 // ============================================================================
@@ -33,9 +35,7 @@ const Utils = {
 
   toTitleCase: (str) => {
     if (!str) return str;
-    return str.replace(/\w\S*/g, (txt) =>
-      txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase()
-    );
+    return str.replace(/\w\S*/g, txt => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
   },
 
   hslToHex: (h, s, l) => {
@@ -73,23 +73,26 @@ const Utils = {
 // 3. SCANNER
 // ============================================================================
 const Scanner = {
-  findNodes: (rootShape) => {
-    // 1. Pass an empty object {} to tell findShapes to grab everything inside this root
-    const allShapes = rootShape.findShapes({}); 
-    
-    // 2. Use standard JavaScript array filtering with your console log check
-    return allShapes.filter((shape) => {
-      console.log("Inspecting shape name:", shape.name);
-      return shape.name && /^(cards?|token)-(.+)$/i.test(shape.name);
-    });
+  /**
+   * Find all card-* and token-* shapes on a page using Penpot's findShapes API.
+   * findShapes({}) returns every shape on the page at all depths.
+   */
+  findNodes: (pageNode) => {
+    const allShapes = pageNode.findShapes({});
+    return allShapes.filter(shape =>
+      shape.name && /^(cards?|token)-(.+)$/i.test(shape.name)
+    );
   },
 
   getIdentifiedCards: (allCandidates) => {
-    let numberedCards = [], pendingCards = [], tokenNodes = [], maxId = 0;
+    const numberedCards = [];
+    const pendingCards  = [];
+    const tokenNodes    = [];
+    let maxId = 0;
 
     for (const node of allCandidates) {
       const name = node.name;
-      if (name.startsWith("token-")) {
+      if (name.startsWith('token-')) {
         tokenNodes.push(node);
       } else if (/^card-(\d+)$/.test(name)) {
         const idx = parseInt(name.match(/^card-(\d+)$/)[1], 10);
@@ -100,16 +103,15 @@ const Scanner = {
       }
     }
 
+    // Assign IDs to unnumbered cards by renaming them
     let nextId = maxId + 1;
     for (const node of pendingCards) {
       try {
-        // Change the name property via Penpot's setter
         node.name = `card-${nextId}`;
-        
         numberedCards.push({ node, sortIndex: nextId });
         nextId++;
-      } catch (err) { 
-        console.error("Penpot renaming failed:", err); 
+      } catch (err) {
+        console.error('Penpot renaming failed:', err);
       }
     }
 
@@ -123,10 +125,7 @@ const Scanner = {
 // 4. PARSER
 // ============================================================================
 const Parser = {
-  /**
-   * Collect all text shapes in a subtree.
-   * In Penpot, text shapes have shape.type === 'text'.
-   */
+  /** Recursively collect text shapes in a subtree */
   getTextShapes: (shape) => {
     let results = [];
     if (shape.type === 'text') results.push(shape);
@@ -139,24 +138,19 @@ const Parser = {
   },
 
   /**
-   * Get the plain-text string from a Penpot text shape.
-   * Penpot exposes shape.characters as a flat string — use it directly.
-   * If that's unavailable, fall back to walking shape.content (rich-text tree).
+   * Extract plain text from a Penpot text shape.
+   * shape.characters is the canonical flat string in Penpot.
+   * Fall back to walking shape.content (rich-text tree) if needed.
    */
   extractPlainText: (textShape) => {
-    // Primary: .characters is the simplest flat representation
-    if (typeof textShape.characters === 'string') {
-      return textShape.characters;
-    }
-    // Fallback: walk rich-text content tree
+    if (typeof textShape.characters === 'string') return textShape.characters;
     if (!textShape.content) return '';
     const parts = [];
     const walk = (node) => {
       if (typeof node.text === 'string') {
         parts.push(node.text);
       } else if (node.children) {
-        const isBlock = node.type === 'paragraph';
-        if (isBlock && parts.length > 0) parts.push('\n');
+        if (node.type === 'paragraph' && parts.length > 0) parts.push('\n');
         for (const child of node.children) walk(child);
       }
     };
@@ -165,9 +159,8 @@ const Parser = {
   },
 
   /**
-   * Extract bold phrases from a text shape.
-   * Penpot's rich-text content tree has leaf nodes with fontWeight (number)
-   * and/or fontStyle. Bold = fontWeight >= 700.
+   * Extract bold phrases from a text shape's rich-text tree.
+   * Penpot leaf nodes carry fontWeight (number string). Bold = >= 700.
    */
   getBoldedPhrases: (textShape) => {
     if (!textShape.content) return [];
@@ -191,70 +184,66 @@ const Parser = {
   },
 
   parseCard: async (cardShape, assignedId) => {
-    const extracted = {
-      name: "Unknown", type: "", types: [], keywords: [],
-      cost: 0, damage: 0, block: 0, text: "",
+    const ext = {
+      name: 'Unknown', type: '', types: [], keywords: [],
+      cost: 0, damage: 0, block: 0, text: '',
       head: false, body: false, leg: false
     };
 
-    const textShapes = Parser.getTextShapes(cardShape);
-
-    for (const shape of textShapes) {
-      const rawContent = Parser.extractPlainText(shape);
+    for (const shape of Parser.getTextShapes(cardShape)) {
+      const rawContent  = Parser.extractPlainText(shape);
       const flatContent = rawContent.replace(/[\r\n]+/g, ' ').trim();
       if (!flatContent) continue;
 
-      // 1. Cost
+      // Cost: "3 AP"
       const costMatch = flatContent.match(/^(\d+)\s*ap$/i);
-      if (costMatch) { extracted.cost = parseInt(costMatch[1], 10); continue; }
+      if (costMatch) { ext.cost = parseInt(costMatch[1], 10); continue; }
 
-      // 2. Damage
+      // Damage: "5 DMG" or "- DMG"
       const dmgMatch = flatContent.match(/^(\d+|-)\s*dmg$/i);
-      if (dmgMatch) { extracted.damage = dmgMatch[1] === '-' ? 0 : parseInt(dmgMatch[1], 10); continue; }
+      if (dmgMatch) { ext.damage = dmgMatch[1] === '-' ? 0 : parseInt(dmgMatch[1], 10); continue; }
 
-      // 3. Block / Dodge
+      // Block / Dodge
       if (/block|dodge/i.test(flatContent)) {
         const isDodge = /dodge/i.test(flatContent);
-        let val = 0, foundMatch = false;
+        let val = 0, found = false;
         const mA = flatContent.match(/^(?:block|dodge)\s*(?:all|head|body|leg)?\s*(\d+)$/i);
         const mB = flatContent.match(/^(\d+)%\s*(?:block|dodge)$/i);
         const mC = flatContent.match(/^(\d+)\s*(?:block|dodge)$/i);
-        if (mA) { val = parseInt(mA[1], 10); foundMatch = true; }
-        else if (mB) { val = parseInt(mB[1], 10); foundMatch = true; }
-        else if (mC) { val = parseInt(mC[1], 10); foundMatch = true; }
-        if (foundMatch) { extracted.block = isDodge ? -1 * val : val; continue; }
+        if      (mA) { val = parseInt(mA[1], 10); found = true; }
+        else if (mB) { val = parseInt(mB[1], 10); found = true; }
+        else if (mC) { val = parseInt(mC[1], 10); found = true; }
+        if (found) { ext.block = isDodge ? -val : val; continue; }
       }
 
-      // 4. Type + Description
-      const typeTextMatch = flatContent.match(/^[^\(]*\((?!-\))([^)]+)\)\s*(.*)/);
-      if (typeTextMatch) {
-        extracted.types = typeTextMatch[1].split(',').map(t => Utils.toTitleCase(t.trim()));
-        extracted.type = extracted.types[0] || '';
-        const typeEndIndex = rawContent.indexOf(')');
-        extracted.text = typeEndIndex !== -1
-          ? rawContent.substring(typeEndIndex + 1).trim()
-          : typeTextMatch[2];
+      // Type + Description: "Attack(Melee) Description text…"
+      const typeMatch = flatContent.match(/^[^\(]*\((?!-\))([^)]+)\)\s*(.*)/);
+      if (typeMatch) {
+        ext.types = typeMatch[1].split(',').map(t => Utils.toTitleCase(t.trim()));
+        ext.type  = ext.types[0] || '';
+        const endIdx = rawContent.indexOf(')');
+        ext.text = endIdx !== -1 ? rawContent.substring(endIdx + 1).trim() : typeMatch[2];
         const rawBolds = Parser.getBoldedPhrases(shape);
-        extracted.keywords = rawBolds.filter(b => {
+        ext.keywords = rawBolds.filter(b => {
           const cleanB = b.replace(/[()]/g, '').trim().toLowerCase();
-          return !extracted.types.some(t => t.toLowerCase() === cleanB);
+          return !ext.types.some(t => t.toLowerCase() === cleanB);
         });
         continue;
       }
 
-      // 5. Zones
+      // Zone targets: "Head Body", "Leg", etc.
       const words = flatContent.split(/\s+/);
       const validZones = ['head', 'body', 'leg'];
       if (words.length > 0 && words.every(w => validZones.includes(w.toLowerCase()))) {
-        if (/head/i.test(flatContent)) extracted.head = true;
-        if (/body/i.test(flatContent)) extracted.body = true;
-        if (/leg/i.test(flatContent)) extracted.leg = true;
+        if (/head/i.test(flatContent)) ext.head = true;
+        if (/body/i.test(flatContent)) ext.body = true;
+        if (/leg/i.test(flatContent))  ext.leg  = true;
         continue;
       }
 
-      // 6. Name fallback
+      // Name fallback
       if (!flatContent.match(/^\d+$/) && flatContent !== '(-)') {
-        extracted.name = Utils.toTitleCase(flatContent);
+        ext.name = Utils.toTitleCase(flatContent);
       }
     }
 
@@ -263,28 +252,27 @@ const Parser = {
       data: {
         id: String(assignedId), isToken: false,
         face: {
-          front: { name: 'Front', type: extracted.type, cost: extracted.cost, image: `${CONFIG.IMG_BASE_URL}/${imgName}`, isHorizontal: false },
-          back:  { name: 'Back',  type: '',             cost: extracted.cost, image: `${CONFIG.IMG_BASE_URL}/cardback.png`,  isHorizontal: false }
+          front: { name: 'Front', type: ext.type, cost: ext.cost, image: `${CONFIG.IMG_BASE_URL}/${imgName}`, isHorizontal: false },
+          back:  { name: 'Back',  type: '',        cost: ext.cost, image: `${CONFIG.IMG_BASE_URL}/cardback.png`, isHorizontal: false }
         },
-        name: extracted.name, type: extracted.type, types: extracted.types,
-        keywords: extracted.keywords, cost: extracted.cost,
-        DMG: extracted.damage, Block: extracted.block, Text: extracted.text,
-        'AttackHead?': extracted.head, 'AttackBody?': extracted.body, 'AttackLeg?': extracted.leg
+        name: ext.name, type: ext.type, types: ext.types, keywords: ext.keywords,
+        cost: ext.cost, DMG: ext.damage, Block: ext.block, Text: ext.text,
+        'AttackHead?': ext.head, 'AttackBody?': ext.body, 'AttackLeg?': ext.leg
       },
       filename: imgName
     };
   },
 
   parseToken: (tokenShape) => {
-    const match = tokenShape.name.match(/^token-(.+)$/);
+    const match     = tokenShape.name.match(/^token-(.+)$/);
     const rawSuffix = match ? match[1] : 'unknown';
-    const displayName = Utils.toTitleCase(rawSuffix.replace(/-/g, ' '));
-    const imgName = `token-${rawSuffix}.png`;
+    const imgName   = `token-${rawSuffix}.png`;
     return {
       data: {
         id: `t-${rawSuffix}`, isToken: true,
         face: { front: { name: '', type: 'false', cost: 0, image: `${CONFIG.IMG_BASE_URL}/${imgName}`, isHorizontal: false } },
-        name: `Token: ${displayName}`, type: 'false', cost: 0, keywords: [],
+        name: `Token: ${Utils.toTitleCase(rawSuffix.replace(/-/g, ' '))}`,
+        type: 'false', cost: 0, keywords: [],
         'AttackHead?': false, 'AttackBody?': false, 'AttackLeg?': false,
         Text: '', Block: 0, DMG: 0
       },
@@ -294,23 +282,68 @@ const Parser = {
 };
 
 // ============================================================================
-// 5. MAIN
+// 5. SYNC HELPER
 // ============================================================================
+/**
+ * Sync tab: copy text content from source cards into matching target cards.
+ *
+ * Penpot's clone() inserts a copy on the SAME page as the original — it
+ * cannot clone a shape from page A directly onto page B. Instead, we do a
+ * text-level copy: for each (name-matched) source card we find the
+ * corresponding target card and copy the characters of every named text
+ * layer, preserving the target's layout/position entirely.
+ *
+ * This is a faithful port of the Figma logic: "update text and numbers
+ * but preserve the target's position".
+ */
+const Sync = {
+  /**
+   * Build a flat map of  layerName → characters  for all text shapes in a card.
+   */
+  buildTextMap: (cardShape) => {
+    const map = new Map();
+    const textShapes = Parser.getTextShapes(cardShape);
+    for (const ts of textShapes) {
+      if (ts.name) map.set(ts.name, Parser.extractPlainText(ts));
+    }
+    return map;
+  },
 
-// Open the plugin panel — second arg is the URL; empty string = same origin /ui.html
+  /**
+   * Apply a text map to the matching text layers in a target card.
+   * Only layers that exist in both source and target (by name) are updated.
+   */
+  applyTextMap: (targetCardShape, textMap) => {
+    const textShapes = Parser.getTextShapes(targetCardShape);
+    let changed = 0;
+    for (const ts of textShapes) {
+      if (ts.name && textMap.has(ts.name)) {
+        const newText = textMap.get(ts.name);
+        try {
+          if (Parser.extractPlainText(ts) !== newText) {
+            ts.characters = newText;
+            changed++;
+          }
+        } catch (e) {
+          console.warn('Could not set characters on', ts.name, e);
+        }
+      }
+    }
+    return changed;
+  }
+};
+
+// ============================================================================
+// 6. MAIN
+// ============================================================================
 penpot.ui.open('Card Exporter', '', { width: 520, height: 620 });
 
-/**
- * Look up a page by id from currentFile.pages[].
- * Returns null if not found.
- */
 function getPageById(id) {
   const pages = penpot.currentFile && penpot.currentFile.pages;
   if (!pages) return null;
   return pages.find(p => p.id === id) || null;
 }
 
-/** Serialize cache to string for localStorage */
 function loadCache() {
   try {
     const raw = penpot.localStorage.getItem(CONFIG.STORAGE_KEY);
@@ -324,52 +357,45 @@ function saveCache(data) {
   } catch (e) { console.error('Cache save error', e); }
 }
 
-// Build page list for UI init
 function getPages() {
-  const file = penpot.currentFile;
-  console.log(`getpages: file `, file);
+  const file      = penpot.currentFile;
   const currentId = penpot.currentPage ? penpot.currentPage.id : null;
-  console.log(`getpages: currentId ${currentId}`);
   if (!file || !file.pages) return [];
-  console.log(`getpages: pages: `, file.pages);
   return file.pages.map(p => ({ id: p.id, name: p.name, current: p.id === currentId }));
 }
 
-// --- BOOT ---
+// ── BOOT ─────────────────────────────────────────────────────────────────────
 (async () => {
   let storedCache = loadCache();
 
   penpot.ui.onMessage(async (msg) => {
-    if (msg.type === 'UI_READY'){
+
+    // UI is ready — send initial state
+    if (msg.type === 'UI_READY') {
       penpot.ui.sendMessage({
         type: 'init-state',
-        pages: getPages(),
-        lastScanDate: storedCache ? storedCache.timestamp : null,
+        pages:         getPages(),
+        lastScanDate:  storedCache ? storedCache.timestamp : null,
         lastScanCount: storedCache ? Object.keys(storedCache.json).length : 0,
-        lastJson: storedCache ? JSON.stringify(storedCache.json, null, 2) : ''
+        lastJson:      storedCache ? JSON.stringify(storedCache.json, null, 2) : ''
       });
+      return;
     }
 
-    // ── EXPORT JSON + IMAGES ──────────────────────────────────────────────
+    // ── EXPORT JSON + IMAGES ────────────────────────────────────────────────
     if (msg.type === 'run-scan') {
-      console.log('run-scan');
-      console.log(msg);
       const pageNode = getPageById(msg.pageId);
       if (!pageNode) {
         penpot.ui.sendMessage({ type: 'error', message: 'Page not found' });
         return;
       }
-      console.log(pageNode);
 
-      const scanDepth = msg.scanDepth || CONFIG.DEFAULT_SEARCH_DEPTH;
-      const allCandidates = Scanner.findNodes(pageNode, 0, scanDepth);
-      console.log(allCandidates);
+      const allCandidates = Scanner.findNodes(pageNode);
       const { numberedCards, tokenNodes } = Scanner.getIdentifiedCards(allCandidates);
-      console.log(numberedCards);
       if (numberedCards.length > 0) await Utils.delay(100);
 
-      const finalMap = {};
-      const totalItems = numberedCards.length + tokenNodes.length;
+      const finalMap     = {};
+      const totalItems   = numberedCards.length + tokenNodes.length;
       let processedCount = 0;
 
       const processNode = async (node, id, parserFunc) => {
@@ -404,48 +430,56 @@ function getPages() {
       };
 
       for (const item of numberedCards) await processNode(item.node, item.sortIndex, Parser.parseCard);
-      for (const node of tokenNodes) await processNode(node, null, Parser.parseToken);
+      for (const node of tokenNodes)    await processNode(node, null, Parser.parseToken);
 
       const newCache = { timestamp: Date.now(), json: finalMap };
       storedCache = newCache;
       saveCache(newCache);
       penpot.ui.sendMessage({ type: 'complete', json: JSON.stringify(finalMap, null, 2), count: Object.keys(finalMap).length });
+      return;
     }
 
-    // ── SYNC CONTENT ──────────────────────────────────────────────────────
-    else if (msg.type === 'run-extract') {
+    // ── SYNC CONTENT ────────────────────────────────────────────────────────
+    // Strategy: copy text layer content by matching layer names.
+    // We CANNOT clone across pages in Penpot (clone() inserts on same page),
+    // so instead we walk each target card's text layers and overwrite their
+    // characters from the matching source card — position is fully preserved.
+    if (msg.type === 'run-extract') {
       try {
         const sourcePage = getPageById(msg.sourceId);
         const targetPage = getPageById(msg.targetId);
         if (!sourcePage || !targetPage) throw new Error('Pages not found');
 
-        const sourceCandidates = Scanner.findNodes(sourcePage, 0, CONFIG.DEFAULT_SEARCH_DEPTH);
+        // Index source cards by their card key (e.g. "card-3", "token-foo")
+        const sourceCandidates = Scanner.findNodes(sourcePage);
         const { numberedCards: srcNumbered, tokenNodes: srcTokens } = Scanner.getIdentifiedCards(sourceCandidates);
 
-        const sourceMap = new Map();
-        srcNumbered.forEach(item => sourceMap.set(`card-${item.sortIndex}`, item.node));
-        srcTokens.forEach(node => sourceMap.set(node.name, node));
+        const sourceMap = new Map(); // cardKey → { node, textMap }
+        for (const item of srcNumbered) {
+          const key = `card-${item.sortIndex}`;
+          sourceMap.set(key, { node: item.node, textMap: Sync.buildTextMap(item.node) });
+        }
+        for (const node of srcTokens) {
+          sourceMap.set(node.name, { node, textMap: Sync.buildTextMap(node) });
+        }
 
-        const targetCandidates = Scanner.findNodes(targetPage, 0, CONFIG.DEFAULT_SEARCH_DEPTH);
+        // Walk target cards and apply matching source text maps
+        const targetCandidates = Scanner.findNodes(targetPage);
         let updateCount = 0;
 
         for (const targetNode of targetCandidates) {
-          let targetId = null;
+          let cardKey = null;
           if (targetNode.name.startsWith('token-')) {
-            targetId = targetNode.name;
+            cardKey = targetNode.name;
           } else {
             const m = targetNode.name.match(/^card-(\d+)$/);
-            if (m) targetId = `card-${m[1]}`;
+            if (m) cardKey = `card-${m[1]}`;
           }
 
-          if (targetId && sourceMap.has(targetId)) {
-            const sourceNode = sourceMap.get(targetId);
-            const newShape = sourceNode.clone();
-            // Preserve target position
-            newShape.x = targetNode.x;
-            newShape.y = targetNode.y;
-            targetNode.remove();
-            updateCount++;
+          if (cardKey && sourceMap.has(cardKey)) {
+            const { textMap } = sourceMap.get(cardKey);
+            const changed = Sync.applyTextMap(targetNode, textMap);
+            if (changed > 0) updateCount++;
           }
         }
 
@@ -453,24 +487,27 @@ function getPages() {
       } catch (err) {
         penpot.ui.sendMessage({ type: 'error', message: err.message });
       }
+      return;
     }
 
-    // ── MINIDECK DATA ─────────────────────────────────────────────────────
-    else if (msg.type === 'extract-minideck-data') {
+    // ── MINIDECK DATA ────────────────────────────────────────────────────────
+    if (msg.type === 'extract-minideck-data') {
       try {
         const pageNode = getPageById(msg.pageId);
         if (!pageNode) throw new Error('Page not found');
 
         const minidecks = [];
-        const usedHues = [];
+        const usedHues  = [];
 
         for (const deckFrame of (pageNode.children || [])) {
           const t = (deckFrame.type || '').toLowerCase();
-          if (t !== 'frame' && t !== 'group' && t !== 'bool') continue;
+          if (t !== 'frame' && t !== 'group') continue;
           if (deckFrame.name.toLowerCase().startsWith('card-')) continue;
 
-          const uniqueColor = Utils.getDistinctBrightColor(usedHues);
-          const deckObj = { name: deckFrame.name, description: 'Generated from Penpot', color: uniqueColor, cardPool: [] };
+          const deckObj = {
+            name: deckFrame.name, description: 'Generated from Penpot',
+            color: Utils.getDistinctBrightColor(usedHues), cardPool: []
+          };
 
           for (const rarityFrame of (deckFrame.children || [])) {
             const rt = (rarityFrame.type || '').toLowerCase();
@@ -484,8 +521,8 @@ function getPages() {
                 const idMatch = cardNode.name.match(/^cards?-(\d+)$/);
                 if (idMatch) cardId = parseInt(idMatch[1], 10);
 
-                const parsed = await Parser.parseCard(cardNode, cardId);
-                const synergies = [`${parsed.data.cost} AP`];
+                const parsed     = await Parser.parseCard(cardNode, cardId);
+                const synergies  = [`${parsed.data.cost} AP`];
                 if (parsed.data.types && parsed.data.types.length) synergies.push(...parsed.data.types);
                 deckObj.cardPool.push({ id: parsed.data.id, name: parsed.data.name, rarity: rarityName, synergies });
               }
@@ -498,15 +535,16 @@ function getPages() {
       } catch (err) {
         penpot.ui.sendMessage({ type: 'error', message: err.message });
       }
+      return;
     }
 
-    // ── STATS DATA ────────────────────────────────────────────────────────
-    else if (msg.type === 'get-stats-data') {
+    // ── STATS DATA ───────────────────────────────────────────────────────────
+    if (msg.type === 'get-stats-data') {
       try {
         const pageNode = getPageById(msg.pageId);
         if (!pageNode) throw new Error('Page not found');
 
-        const allCandidates = Scanner.findNodes(pageNode, 0, CONFIG.DEFAULT_SEARCH_DEPTH);
+        const allCandidates = Scanner.findNodes(pageNode);
         const { numberedCards } = Scanner.getIdentifiedCards(allCandidates);
 
         const statsData = [];
@@ -518,55 +556,50 @@ function getPages() {
       } catch (err) {
         penpot.ui.sendMessage({ type: 'error', message: err.message });
       }
+      return;
     }
 
-    // ── TRANSFORM CARDS ───────────────────────────────────────────────────
-    else if (msg.type === 'run-transform') {
+    // ── TRANSFORM CARDS ──────────────────────────────────────────────────────
+    if (msg.type === 'run-transform') {
       try {
         const pageNode = getPageById(msg.pageId);
         if (!pageNode) throw new Error('Page not found');
 
-        // Find a component named 'Card' in the library
-        const libComponents = penpot.library && penpot.library.local
-          ? penpot.library.local.components
-          : [];
-        const cardComponent = libComponents.find(c => c.name === 'Card') || null;
-
+        // Find a component named 'Card' in the local library
+        const libComponents = (penpot.library && penpot.library.local && penpot.library.local.components) || [];
+        const cardComponent  = libComponents.find(c => c.name === 'Card') || null;
         if (!cardComponent) throw new Error("Could not find a component named 'Card' in the local library.");
 
-        const allCandidates = Scanner.findNodes(pageNode, 0, CONFIG.DEFAULT_SEARCH_DEPTH);
+        const allCandidates = Scanner.findNodes(pageNode);
         const { numberedCards } = Scanner.getIdentifiedCards(allCandidates);
 
-        let minX = Infinity, minY = Infinity, maxX = -Infinity;
+        let minX = Infinity, maxX = -Infinity, minY = Infinity;
         for (const { node } of numberedCards) {
           if (node.x < minX) minX = node.x;
           if (node.x + node.width > maxX) maxX = node.x + node.width;
           if (node.y < minY) minY = node.y;
         }
 
-        const offsetX = maxX + 1000;
-        let transformCount = 0;
+        const offsetX       = maxX + 1000;
+        let transformCount  = 0;
 
         for (const item of numberedCards) {
-          const cardId = item.sortIndex;
+          const cardId  = item.sortIndex;
           const oldNode = item.node;
-          const parsed = await Parser.parseCard(oldNode, cardId);
-          const data = parsed.data;
+          const parsed  = await Parser.parseCard(oldNode, cardId);
+          const data    = parsed.data;
 
-          const newInstance = cardComponent.createInstance
-            ? cardComponent.createInstance()
-            : null;
+          // instantiate() creates an instance on the current page
+          const newInstance = cardComponent.instantiate ? cardComponent.instantiate() : null;
           if (!newInstance) continue;
 
-          newInstance.x = offsetX + (oldNode.x - minX);
-          newInstance.y = minY + (oldNode.y - minY);
+          newInstance.x    = offsetX + (oldNode.x - minX);
+          newInstance.y    = minY    + (oldNode.y - minY);
           newInstance.name = `card-${cardId}`;
 
-          // Update named text children
           const setChildText = (childName, value) => {
-            if (value === undefined || value === null) return;
-            const textShapes = Parser.getTextShapes(newInstance);
-            for (const ts of textShapes) {
+            if (value == null) return;
+            for (const ts of Parser.getTextShapes(newInstance)) {
               if (ts.name === childName) {
                 try { ts.characters = String(value); } catch (e) {}
                 return;
@@ -574,14 +607,15 @@ function getPages() {
             }
           };
 
-          setChildText('AP Cost Text', `${data.cost}`);
-          let valueText = '';
-          if ((data.type || '').toUpperCase() === 'GUARD') valueText = `${Math.abs(data.Block)}`;
-          else if (['GUN', 'MELEE'].includes((data.type || '').toUpperCase())) valueText = `${data.DMG}`;
-          setChildText('Card Value Text', valueText);
-          setChildText('Card Name', (data.name || '').toUpperCase());
+          setChildText('AP Cost Text',   `${data.cost}`);
+          setChildText('Card Name',      (data.name || '').toUpperCase());
           setChildText('Card Type Text', (data.type || '').toUpperCase());
           setChildText('Card Effect Text', Utils.toTitleCase(data.Text || ''));
+
+          let valueText = '';
+          if      ((data.type || '').toUpperCase() === 'GUARD')                         valueText = `${Math.abs(data.Block)}`;
+          else if (['GUN', 'MELEE'].includes((data.type || '').toUpperCase()))           valueText = `${data.DMG}`;
+          setChildText('Card Value Text', valueText);
 
           transformCount++;
         }
@@ -590,6 +624,7 @@ function getPages() {
       } catch (err) {
         penpot.ui.sendMessage({ type: 'error', message: err.message });
       }
+      return;
     }
   });
 })();
