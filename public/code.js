@@ -1,4 +1,3 @@
-'PLUGINEOF'
 /**
  * CARD EXPORTER — PENPOT PLUGIN (code.js)
  *
@@ -583,4 +582,3 @@ function getPages() {
     }
   });
 })();
-PLUGINEOF
