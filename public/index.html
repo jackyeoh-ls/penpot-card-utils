@@ -289,6 +289,12 @@
     let costChartInstance = null;
     let bodyChartInstance = null;
 
+    // report ready
+    window.addEventListener('DOMContentLoaded', () => {
+      // Signal to the backend script that the UI is open and ready
+      parent.postMessage({ type: 'UI_READY' }, '*');
+    });
+
     // ─── PENPOT MESSAGE BRIDGE ──────────────────────────────────────────────
     // Penpot plugins communicate via window.addEventListener('message') and
     // window.parent.postMessage. The plugin API wraps this, but in the HTML

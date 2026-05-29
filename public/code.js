@@ -337,15 +337,16 @@ function getPages() {
 (async () => {
   let storedCache = loadCache();
 
-  penpot.ui.sendMessage({
-    type: 'init-state',
-    pages: getPages(),
-    lastScanDate: storedCache ? storedCache.timestamp : null,
-    lastScanCount: storedCache ? Object.keys(storedCache.json).length : 0,
-    lastJson: storedCache ? JSON.stringify(storedCache.json, null, 2) : ''
-  });
-
   penpot.ui.onMessage(async (msg) => {
+    if (msg.type === 'UI_READY'){
+      penpot.ui.sendMessage({
+        type: 'init-state',
+        pages: getPages(),
+        lastScanDate: storedCache ? storedCache.timestamp : null,
+        lastScanCount: storedCache ? Object.keys(storedCache.json).length : 0,
+        lastJson: storedCache ? JSON.stringify(storedCache.json, null, 2) : ''
+      });
+    }
 
     // ── EXPORT JSON + IMAGES ──────────────────────────────────────────────
     if (msg.type === 'run-scan') {
