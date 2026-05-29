@@ -133,7 +133,7 @@ const Parser = {
     if (shape.type === 'text') results.push(shape);
     if (shape.children && shape.children.length) {
       for (const child of shape.children) {
-        results = results.concat(Parser.getTextShapes(child));
+        results = results.concat(Parser.getTextShapes(child)[0]);
       }
     }
     return results;
