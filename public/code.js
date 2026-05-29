@@ -74,31 +74,14 @@ const Utils = {
 // ============================================================================
 const Scanner = {
   /**
-   * Find all card-* and token-* shapes by walking the page's child tree manually.
-   *
-   * We deliberately avoid findShapes({}) here because it returns a flat list of
-   * shapes at all depths — shapes returned that way may not have their .children
-   * arrays populated, which breaks Parser.getTextShapes and Sync.buildTextMap.
-   *
-   * Walking .children ourselves guarantees every matched shape is a real live
-   * object with its full subtree intact.
+   * Find all card-* and token-* shapes on a page using Penpot's findShapes API.
+   * findShapes({}) returns every shape on the page at all depths with full objects.
    */
   findNodes: (pageNode) => {
-    const results = [];
-    const walk = (shape) => {
-      if (shape.name && /^(cards?|token)-(.+)$/i.test(shape.name)) {
-        results.push(shape);
-        // Don't recurse into matched cards — we want the card frame, not its children
-        return;
-      }
-      if (shape.children && shape.children.length) {
-        for (const child of shape.children) walk(child);
-      }
-    };
-    if (pageNode.children) {
-      for (const child of pageNode.children) walk(child);
-    }
-    return results;
+    const allShapes = pageNode.findShapes({});
+    return allShapes.filter((shape) => {
+      return shape.name && /^(cards?|token)-(.+)$/i.test(shape.name);
+    });
   },
 
   getIdentifiedCards: (allCandidates) => {
@@ -458,35 +441,42 @@ function getPages() {
 
     // ── SYNC CONTENT ────────────────────────────────────────────────────────
     // Strategy: copy text layer content by matching layer names.
-    // We CANNOT clone across pages in Penpot (clone() inserts on same page),
-    // so instead we walk each target card's text layers and overwrite their
-    // characters from the matching source card — position is fully preserved.
+    // IMPORTANT: Penpot only allows writing to shapes on the CURRENT page.
+    // So we must:
+    //   1. Read all source text maps (source page can be non-current, reads are fine)
+    //   2. Navigate to the target page (makes it current)
+    //   3. Re-scan target page now that it's current, then apply writes
     if (msg.type === 'run-extract') {
       try {
         const sourcePage = getPageById(msg.sourceId);
         const targetPage = getPageById(msg.targetId);
         if (!sourcePage || !targetPage) throw new Error('Pages not found');
 
-        // Index source cards by their card key (e.g. "card-3", "token-foo")
+        // STEP 1: Read source text maps while source page data is accessible
         const sourceCandidates = Scanner.findNodes(sourcePage);
         console.log('[Sync] source candidates:', sourceCandidates.map(n => n.name));
         const { numberedCards: srcNumbered, tokenNodes: srcTokens } = Scanner.getIdentifiedCards(sourceCandidates);
 
-        const sourceMap = new Map(); // cardKey → { node, textMap }
+        const sourceMap = new Map(); // cardKey → textMap
         for (const item of srcNumbered) {
-          const key = `card-${item.sortIndex}`;
+          const key     = `card-${item.sortIndex}`;
           const textMap = Sync.buildTextMap(item.node);
           console.log(`[Sync] source "${key}" text layers:`, [...textMap.entries()]);
-          sourceMap.set(key, { node: item.node, textMap });
+          sourceMap.set(key, textMap);
         }
         for (const node of srcTokens) {
           const textMap = Sync.buildTextMap(node);
           console.log(`[Sync] source token "${node.name}" text layers:`, [...textMap.entries()]);
-          sourceMap.set(node.name, { node, textMap });
+          sourceMap.set(node.name, textMap);
         }
 
-        // Walk target cards and apply matching source text maps
-        const targetCandidates = Scanner.findNodes(targetPage);
+        // STEP 2: Navigate to target page so writes are permitted
+        penpot.openPage(targetPage);
+        await Utils.delay(300); // allow navigation to settle
+
+        // STEP 3: Re-resolve target cards on the now-current page
+        const currentTarget = getPageById(msg.targetId);
+        const targetCandidates = Scanner.findNodes(currentTarget);
         console.log('[Sync] target candidates:', targetCandidates.map(n => n.name));
         let updateCount = 0;
 
@@ -500,7 +490,7 @@ function getPages() {
           }
 
           if (cardKey && sourceMap.has(cardKey)) {
-            const { textMap } = sourceMap.get(cardKey);
+            const textMap        = sourceMap.get(cardKey);
             const targetTextShapes = Parser.getTextShapes(targetNode);
             console.log(`[Sync] target "${cardKey}" text layers:`, targetTextShapes.map(ts => `${ts.name}="${Parser.extractPlainText(ts)}"`));
             const changed = Sync.applyTextMap(targetNode, textMap);
@@ -513,6 +503,7 @@ function getPages() {
 
         penpot.ui.sendMessage({ type: 'extract-complete', count: updateCount });
       } catch (err) {
+        console.error('[Sync] error:', err);
         penpot.ui.sendMessage({ type: 'error', message: err.message });
       }
       return;
