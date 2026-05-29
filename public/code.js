@@ -332,7 +332,11 @@ const Sync = {
     const textShapes = Parser.getTextShapes(targetCardShape);
     let changed = 0;
     
+    console.log(`textShapes: `, textShapes);
     for (const ts of textShapes) {
+      console.log(`ts: `, ts);
+      console.log(`ts.name: `, ts.name);
+      console.log(`textMap.has(ts.name): `, textMap.has(ts.name));
       if (ts.name && textMap.has(ts.name)) {
         const newText = textMap.get(ts.name);
         try {
@@ -344,6 +348,8 @@ const Sync = {
             ts.text = newText; 
             
             changed++;
+          }else{
+            console.log(`failed to extract pain text`);
           }
         } catch (e) {
           console.warn('Could not set text string on Penpot shape:', ts.name, e);
@@ -501,12 +507,13 @@ function getPages() {
 
         // 🚨 FIX: Filter the list down so you are only treating the top-level parent Card Frames/Boards as loop targets
         const targetCardsAndTokens = allCandidates.filter(node => node.type === 'board' || node.type === 'group');
-
+        console.log(`targetCardsAndTokens: `, targetCardsAndTokens);
         console.log('[Sync] filtered parent target frames:', targetCardsAndTokens.map(n => n.name));
         let updateCount = 0;
 
         // Loop through the actual container frames instead of raw child shapes
         for (const targetNode of targetCardsAndTokens) {
+          console.log(`targetNode: `, targetNode);
           let cardKey = null;
           if (targetNode.name.startsWith('token-')) {
             cardKey = targetNode.name;
@@ -516,10 +523,13 @@ function getPages() {
           }
           
           if (cardKey && sourceMap.has(cardKey)) {
+            console.log(`cardKey: `, cardKey);
             const textMap = sourceMap.get(cardKey);
+            console.log(`textMap: `, textMap);
             
             // Now targetNode is guaranteed to be a parent Frame, so this lookup will cleanly gather its sub-layers!
             const targetTextShapes = Parser.getTextShapes(targetNode);
+            console.log(`targetTextShapes: `, targetTextShapes);
             
             console.log(`[Sync] target "${cardKey}" text layers:`, targetTextShapes.map(ts => `${ts.name}="${Parser.extractPlainText(ts)}"`));
             
