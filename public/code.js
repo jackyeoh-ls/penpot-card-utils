@@ -75,6 +75,9 @@ const Utils = {
 const Scanner = {
   // 1. Fixed the structural tree navigation for Penpot shapes
   findNodes: (shape, currentDepth, maxDepth) => {
+    console.log(`shape: `, shape);
+    console.log(`currentDepth: `, currentDepth);
+    console.log(`maxDepth: `, maxDepth);
     let results = [];
     
     if (shape.name && /^(cards?|token)-(.+)$/i.test(shape.name)) {
@@ -359,11 +362,13 @@ function getPages() {
 
     // ── EXPORT JSON + IMAGES ──────────────────────────────────────────────
     if (msg.type === 'run-scan') {
+      console.log(msg);
       const pageNode = getPageById(msg.pageId);
       if (!pageNode) {
         penpot.ui.sendMessage({ type: 'error', message: 'Page not found' });
         return;
       }
+      console.log(pageNode);
 
       const scanDepth = msg.scanDepth || CONFIG.DEFAULT_SEARCH_DEPTH;
       const allCandidates = Scanner.findNodes(pageNode, 0, scanDepth);
