@@ -78,6 +78,7 @@ const Scanner = {
   findNodes: (rootShape) => {
     // findShapes accepts a predicate function to filter nodes on the fly
     return rootShape.findShapes((shape) => {
+      console.log(shape);
       return shape.name && /^(cards?|token)-(.+)$/i.test(shape.name);
     });
   },
@@ -350,6 +351,7 @@ function getPages() {
 
     // ── EXPORT JSON + IMAGES ──────────────────────────────────────────────
     if (msg.type === 'run-scan') {
+      console.log('run-scan');
       console.log(msg);
       const pageNode = getPageById(msg.pageId);
       if (!pageNode) {
@@ -360,7 +362,9 @@ function getPages() {
 
       const scanDepth = msg.scanDepth || CONFIG.DEFAULT_SEARCH_DEPTH;
       const allCandidates = Scanner.findNodes(pageNode, 0, scanDepth);
+      console.log(allCandidates);
       const { numberedCards, tokenNodes } = Scanner.getIdentifiedCards(allCandidates);
+      console.log(numberedCards);
       if (numberedCards.length > 0) await Utils.delay(100);
 
       const finalMap = {};
