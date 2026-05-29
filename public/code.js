@@ -144,7 +144,7 @@ const Parser = {
    */
   extractPlainText: (textShape) => {
     // Penpot stores the flat string directly in the .text property
-    if (typeof textShape.text === 'string') return textShape.text;
+    if (typeof textShape.characters === 'string') return textShape.characters;
     return '';
   },
 
