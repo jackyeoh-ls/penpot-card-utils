@@ -129,9 +129,14 @@ const Parser = {
    * This handles performance significantly better than manual JS loops.
    */
   getTextShapes: (shape) => {
-    if (!shape || typeof shape.findShapes !== 'function') return [];
-    // Tell Penpot to grab all sub-elements of type "text" cleanly
-    return shape.findShapes({ type: "text" });
+    let results = [];
+    if (shape.type === 'text') results.push(shape);
+    if (shape.children && shape.children.length) {
+      for (const child of shape.children) {
+        results = results.concat(Parser.getTextShapes(child));
+      }
+    }
+    return results;
   },
 
   /**
