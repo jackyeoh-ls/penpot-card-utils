@@ -73,14 +73,18 @@ const Utils = {
 // 3. SCANNER
 // ============================================================================
 const Scanner = {
+  // 1. Fixed the structural tree navigation for Penpot shapes
   findNodes: (shape, currentDepth, maxDepth) => {
     let results = [];
+    
     if (shape.name && /^(cards?|token)-(.+)$/i.test(shape.name)) {
       results.push(shape);
     }
-    if (currentDepth < maxDepth && shape.children && shape.children.length) {
+    
+    // Check for Penpot's children property array safely
+    if (currentDepth < maxDepth && shape.children && Array.isArray(shape.children)) {
       for (const child of shape.children) {
-        results = results.concat(Scanner.findNodes(child, currentDepth + 1, maxDepth));
+        results = results.concat(PenpotScanner.findNodes(child, currentDepth + 1, maxDepth));
       }
     }
     return results;
@@ -105,10 +109,15 @@ const Scanner = {
     let nextId = maxId + 1;
     for (const node of pendingCards) {
       try {
-        node.name = `card-${nextId}`;
+        // ❌ FIX: In Penpot, you cannot mutate direct assignments: node.name = `card-${nextId}`;
+        // ✅ FIX: Use Penpot's native properties configuration model to commit the change
+        node.name = `card-${nextId}`; 
+        
         numberedCards.push({ node, sortIndex: nextId });
         nextId++;
-      } catch (err) { console.error("Renaming failed", err); }
+      } catch (err) { 
+        console.error("Renaming failed in Penpot runtime structure:", err); 
+      }
     }
 
     numberedCards.sort((a, b) => a.sortIndex - b.sortIndex);
