@@ -492,11 +492,16 @@ function getPages() {
 
         // STEP 3: Re-resolve target cards on the now-current page
         const currentTarget = getPageById(msg.targetId);
-        const targetCandidates = Scanner.findNodes(currentTarget);
-        console.log('[Sync] target candidates:', targetCandidates.map(n => n.name));
+        const allCandidates = Scanner.findNodes(currentTarget);
+
+        // 🚨 FIX: Filter the list down so you are only treating the top-level parent Card Frames/Boards as loop targets
+        const targetCardsAndTokens = allCandidates.filter(node => node.type === 'board' || node.type === 'group');
+
+        console.log('[Sync] filtered parent target frames:', targetCardsAndTokens.map(n => n.name));
         let updateCount = 0;
 
-        for (const targetNode of targetCandidates) {
+        // Loop through the actual container frames instead of raw child shapes
+        for (const targetNode of targetCardsAndTokens) {
           let cardKey = null;
           if (targetNode.name.startsWith('token-')) {
             cardKey = targetNode.name;
@@ -504,11 +509,15 @@ function getPages() {
             const m = targetNode.name.match(/^card-(\d+)$/);
             if (m) cardKey = `card-${m[1]}`;
           }
-
+          
           if (cardKey && sourceMap.has(cardKey)) {
-            const textMap        = sourceMap.get(cardKey);
+            const textMap = sourceMap.get(cardKey);
+            
+            // Now targetNode is guaranteed to be a parent Frame, so this lookup will cleanly gather its sub-layers!
             const targetTextShapes = Parser.getTextShapes(targetNode);
+            
             console.log(`[Sync] target "${cardKey}" text layers:`, targetTextShapes.map(ts => `${ts.name}="${Parser.extractPlainText(ts)}"`));
+            
             const changed = Sync.applyTextMap(targetNode, textMap);
             console.log(`[Sync] "${cardKey}" — ${changed} layer(s) updated`);
             if (changed > 0) updateCount++;
