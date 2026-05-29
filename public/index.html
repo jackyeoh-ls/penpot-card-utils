@@ -334,17 +334,13 @@
       const selects = [pageSelect, sourcePageSelect, targetPageSelect, mdPageSelect, statsPageSelect, transformPageSelect];
       selects.forEach(sel => {
         sel.innerHTML = "";
-        console.log(`fillPageSelects: pages: `, pages);
         pages.forEach(p => {
-          console.log(`fillPageSelects: p: `, p);
           const o = document.createElement('option');
           o.value = p.id;
           o.textContent = p.name;
           if (p.current) o.selected = true;
           sel.appendChild(o);
-          console.log(`fillPageSelects: sel: `, sel);
         });
-        console.log(`fillPageSelects: sel.innerHTML: `, sel.innerHTML);
       });
     }
 
