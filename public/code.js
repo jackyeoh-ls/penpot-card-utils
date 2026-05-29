@@ -325,8 +325,11 @@ function saveCache(data) {
 // Build page list for UI init
 function getPages() {
   const file = penpot.currentFile;
+  console.log(`getpages: file `, file);
   const currentId = penpot.currentPage ? penpot.currentPage.id : null;
+  console.log(`getpages: currentId ${currentId}`);
   if (!file || !file.pages) return [];
+  console.log(`getpages: pages: `, file.pages);
   return file.pages.map(p => ({ id: p.id, name: p.name, current: p.id === currentId }));
 }
 
