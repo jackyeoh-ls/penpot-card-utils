@@ -1,7 +1,7 @@
 {
   "name": "Card Exporter",
   "description": "TCG Card Exporter — exports JSON & images, syncs content, extracts minidecks, and analyzes card balance.",
-  "host": "https://penpot.app",
+  "host": "https://penpot-card-utils.vercel.app",
   "code": "code.js",
   "icon": "/icon.png",
   "permissions": [
