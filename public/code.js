@@ -332,28 +332,51 @@ const Sync = {
     const textShapes = Parser.getTextShapes(targetCardShape);
     let changed = 0;
     
-    console.log(`textShapes: `, textShapes);
-    console.log(`textMap`, textMap);
+    // Convert your source textMap keys into an array of values for loose positional matching
+    // e.g., sourceValues = ["3 ap", "2 dmg", "Head body Leg", "fancycardname_changed", "(Gun) Choose..."]
+    const sourceValues = Array.from(textMap.values());
+    
     for (const ts of textShapes) {
-      console.log(`ts: `, ts);
-      console.log(`ts.name: `, ts.name);
-      console.log(`textMap.has(ts.name): `, textMap.has(ts.name));
-      if (ts.name && textMap.has(ts.name)) {
-        const newText = textMap.get(ts.name);
+      const currentText = Parser.extractPlainText(ts).trim();
+      let matchedNewText = null;
+
+      // 1. Identify layer purpose by structural pattern matching
+      if (/^\d+\s*ap$/i.test(currentText)) {
+        // Find the fresh AP cost string in the source data
+        matchedNewText = sourceValues.find(v => /^\d+\s*ap$/i.test(v));
+      } 
+      else if (/^(\d+|-)\s*dmg$/i.test(currentText)) {
+        // Find the fresh Damage string in the source data
+        matchedNewText = sourceValues.find(v => /^(\d+|-)\s*dmg$/i.test(v));
+      } 
+      else if (/^(head|body|leg|\s)+$/i.test(currentText)) {
+        // Find the fresh Zone targets string
+        matchedNewText = sourceValues.find(v => /^(head|body|leg|\s)+$/i.test(v));
+      } 
+      else if (/^(\(.*?\)|\b[A-Z][a-z]+:)/.test(currentText) || currentText.includes(':')) {
+        // It's a rules/description box layout (e.g., starts with brackets or keyword headers)
+        matchedNewText = sourceValues.find(v => /^(\(.*?\)|\b[A-Z][a-z]+:)/.test(v) || v.includes(':'));
+      } 
+      else {
+        // FALLBACK: If it doesn't match any stat format, it's the Card Title/Name field!
+        // Grab the value from the source map that wasn't claimed by stats or formatting
+        matchedNewText = sourceValues.find(v => 
+          !/^\d+\s*ap$/i.test(v) && 
+          !/^(\d+|-)\s*dmg$/i.test(v) && 
+          !/^(head|body|leg|\s)+$/i.test(v) &&
+          !v.includes(':') &&
+          v !== '(-)'
+        );
+      }
+
+      // 2. Commit the change if a matching structural slot was found and data differs
+      if (matchedNewText && currentText !== matchedNewText.trim()) {
         try {
-          // 1. Double check your Parser.extractPlainText helper uses ts.text for Penpot
-          if (Parser.extractPlainText(ts) !== newText) {
-            
-            // ❌ Figma style: ts.characters = newText;
-            // ✅ Penpot style: Mutate the native string property
-            ts.text = newText; 
-            
-            changed++;
-          }else{
-            console.log(`failed to extract pain text`);
-          }
+          ts.text = matchedNewText;
+          changed++;
+          console.log(`[Sync] Updated layer from "${currentText}" -> "${matchedNewText}"`);
         } catch (e) {
-          console.warn('Could not set text string on Penpot shape:', ts.name, e);
+          console.warn('Could not update text shape text:', ts.name, e);
         }
       }
     }
