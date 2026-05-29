@@ -125,61 +125,66 @@ const Scanner = {
 // 4. PARSER
 // ============================================================================
 const Parser = {
-  /** Recursively collect text shapes in a subtree */
+  /** * Collect text shapes in a subtree using native Penpot methods
+   * This handles performance significantly better than manual JS loops.
+   */
   getTextShapes: (shape) => {
-    let results = [];
-    if (shape.type === 'text') results.push(shape);
-    if (shape.children && shape.children.length) {
-      for (const child of shape.children) {
-        results = results.concat(Parser.getTextShapes(child));
-      }
-    }
-    return results;
+    if (!shape || typeof shape.findShapes !== 'function') return [];
+    // Tell Penpot to grab all sub-elements of type "text" cleanly
+    return shape.findShapes({ type: "text" });
   },
 
   /**
-   * Extract plain text from a Penpot text shape.
-   * shape.characters is the canonical flat string in Penpot.
-   * Fall back to walking shape.content (rich-text tree) if needed.
+   * Extract plain text from a Penpot text shape safely.
    */
   extractPlainText: (textShape) => {
-    if (typeof textShape.characters === 'string') return textShape.characters;
-    if (!textShape.content) return '';
-    const parts = [];
-    const walk = (node) => {
-      if (typeof node.text === 'string') {
-        parts.push(node.text);
-      } else if (node.children) {
-        if (node.type === 'paragraph' && parts.length > 0) parts.push('\n');
-        for (const child of node.children) walk(child);
-      }
-    };
-    walk(textShape.content);
-    return parts.join('');
+    // Penpot stores the flat string directly in the .text property
+    if (typeof textShape.text === 'string') return textShape.text;
+    return '';
   },
 
   /**
-   * Extract bold phrases from a text shape's rich-text tree.
-   * Penpot leaf nodes carry fontWeight (number string). Bold = >= 700.
+   * Extract bold phrases from Penpot text configurations.
+   * In Penpot, text shapes carry a font-weight array or string map 
+   * matching styles directly inside the engine configuration.
    */
   getBoldedPhrases: (textShape) => {
-    if (!textShape.content) return [];
+    // If Penpot doesn't show mixed rich formatting states, fall back to evaluating the entire string
+    if (!textShape.text) return [];
+    
     const bolds = [];
-    const walk = (node) => {
-      if (typeof node.text === 'string' && node.text.trim()) {
-        const fw = parseInt(node.fontWeight || '400', 10);
-        const isBold = fw >= 700 || (node.fontStyle || '').toLowerCase().includes('bold');
-        if (isBold) {
-          for (let part of node.text.split('\n')) {
+    const flatText = textShape.text;
+
+    // Check if the base text block itself is globally bolded via Penpot properties
+    const shapeWeight = parseInt(textShape.fontWeight || '400', 10);
+    const isGloballyBold = shapeWeight >= 700 || String(textShape.fontStyle || '').toLowerCase().includes('bold');
+
+    if (isGloballyBold) {
+      for (let part of flatText.split('\n')) {
+        let clean = part.replace(/[->.:→]/g, ' ').replace(/\s+/g, ' ').trim();
+        clean = Utils.toTitleCase(clean);
+        if (clean.length > 1 || /[a-zA-Z0-9]/.test(clean)) {
+          bolds.push(clean);
+        }
+      }
+    } 
+    
+    // Note: If parsing multi-styled text inside a single field box, 
+    // evaluate the layout using Penpot's internal rich metadata tracking array:
+    else if (Array.isArray(textShape.styles)) {
+      // Penpot maps custom styling chunks across ranges
+      for (const block of textShape.styles) {
+        const weight = parseInt(block.fontWeight || '400', 10);
+        if (weight >= 700 && block.text) {
+          for (let part of block.text.split('\n')) {
             let clean = part.replace(/[->.:→]/g, ' ').replace(/\s+/g, ' ').trim();
             clean = Utils.toTitleCase(clean);
             if (clean.length > 1 || /[a-zA-Z0-9]/.test(clean)) bolds.push(clean);
           }
         }
       }
-      if (node.children) node.children.forEach(walk);
-    };
-    walk(textShape.content);
+    }
+
     return bolds;
   },
 
@@ -190,7 +195,10 @@ const Parser = {
       head: false, body: false, leg: false
     };
 
-    for (const shape of Parser.getTextShapes(cardShape)) {
+    // Correctly routes through Penpot's native array retrieval engine
+    const textLayers = Parser.getTextShapes(cardShape);
+
+    for (const shape of textLayers) {
       const rawContent  = Parser.extractPlainText(shape);
       const flatContent = rawContent.replace(/[\r\n]+/g, ' ').trim();
       if (!flatContent) continue;
@@ -223,6 +231,8 @@ const Parser = {
         ext.type  = ext.types[0] || '';
         const endIdx = rawContent.indexOf(')');
         ext.text = endIdx !== -1 ? rawContent.substring(endIdx + 1).trim() : typeMatch[2];
+        
+        // Harvest using Penpot style metrics lookup
         const rawBolds = Parser.getBoldedPhrases(shape);
         ext.keywords = rawBolds.filter(b => {
           const cleanB = b.replace(/[()]/g, '').trim().toLowerCase();
@@ -316,16 +326,22 @@ const Sync = {
   applyTextMap: (targetCardShape, textMap) => {
     const textShapes = Parser.getTextShapes(targetCardShape);
     let changed = 0;
+    
     for (const ts of textShapes) {
       if (ts.name && textMap.has(ts.name)) {
         const newText = textMap.get(ts.name);
         try {
+          // 1. Double check your Parser.extractPlainText helper uses ts.text for Penpot
           if (Parser.extractPlainText(ts) !== newText) {
-            ts.characters = newText;
+            
+            // ❌ Figma style: ts.characters = newText;
+            // ✅ Penpot style: Mutate the native string property
+            ts.text = newText; 
+            
             changed++;
           }
         } catch (e) {
-          console.warn('Could not set characters on', ts.name, e);
+          console.warn('Could not set text string on Penpot shape:', ts.name, e);
         }
       }
     }
