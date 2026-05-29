@@ -73,12 +73,13 @@ const Utils = {
 // 3. SCANNER
 // ============================================================================
 const Scanner = {
-  // 1. We no longer need a manual recursive loop! 
-  // Penpot's findShapes() scans the entire sub-tree automatically.
   findNodes: (rootShape) => {
-    // findShapes accepts a predicate function to filter nodes on the fly
-    return rootShape.findShapes((shape) => {
-      console.log(shape);
+    // 1. Pass an empty object {} to tell findShapes to grab everything inside this root
+    const allShapes = rootShape.findShapes({}); 
+    
+    // 2. Use standard JavaScript array filtering with your console log check
+    return allShapes.filter((shape) => {
+      console.log("Inspecting shape name:", shape.name);
       return shape.name && /^(cards?|token)-(.+)$/i.test(shape.name);
     });
   },
