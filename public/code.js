@@ -74,14 +74,31 @@ const Utils = {
 // ============================================================================
 const Scanner = {
   /**
-   * Find all card-* and token-* shapes on a page using Penpot's findShapes API.
-   * findShapes({}) returns every shape on the page at all depths.
+   * Find all card-* and token-* shapes by walking the page's child tree manually.
+   *
+   * We deliberately avoid findShapes({}) here because it returns a flat list of
+   * shapes at all depths — shapes returned that way may not have their .children
+   * arrays populated, which breaks Parser.getTextShapes and Sync.buildTextMap.
+   *
+   * Walking .children ourselves guarantees every matched shape is a real live
+   * object with its full subtree intact.
    */
   findNodes: (pageNode) => {
-    const allShapes = pageNode.findShapes({});
-    return allShapes.filter(shape =>
-      shape.name && /^(cards?|token)-(.+)$/i.test(shape.name)
-    );
+    const results = [];
+    const walk = (shape) => {
+      if (shape.name && /^(cards?|token)-(.+)$/i.test(shape.name)) {
+        results.push(shape);
+        // Don't recurse into matched cards — we want the card frame, not its children
+        return;
+      }
+      if (shape.children && shape.children.length) {
+        for (const child of shape.children) walk(child);
+      }
+    };
+    if (pageNode.children) {
+      for (const child of pageNode.children) walk(child);
+    }
+    return results;
   },
 
   getIdentifiedCards: (allCandidates) => {
@@ -452,19 +469,25 @@ function getPages() {
 
         // Index source cards by their card key (e.g. "card-3", "token-foo")
         const sourceCandidates = Scanner.findNodes(sourcePage);
+        console.log('[Sync] source candidates:', sourceCandidates.map(n => n.name));
         const { numberedCards: srcNumbered, tokenNodes: srcTokens } = Scanner.getIdentifiedCards(sourceCandidates);
 
         const sourceMap = new Map(); // cardKey → { node, textMap }
         for (const item of srcNumbered) {
           const key = `card-${item.sortIndex}`;
-          sourceMap.set(key, { node: item.node, textMap: Sync.buildTextMap(item.node) });
+          const textMap = Sync.buildTextMap(item.node);
+          console.log(`[Sync] source "${key}" text layers:`, [...textMap.entries()]);
+          sourceMap.set(key, { node: item.node, textMap });
         }
         for (const node of srcTokens) {
-          sourceMap.set(node.name, { node, textMap: Sync.buildTextMap(node) });
+          const textMap = Sync.buildTextMap(node);
+          console.log(`[Sync] source token "${node.name}" text layers:`, [...textMap.entries()]);
+          sourceMap.set(node.name, { node, textMap });
         }
 
         // Walk target cards and apply matching source text maps
         const targetCandidates = Scanner.findNodes(targetPage);
+        console.log('[Sync] target candidates:', targetCandidates.map(n => n.name));
         let updateCount = 0;
 
         for (const targetNode of targetCandidates) {
@@ -478,8 +501,13 @@ function getPages() {
 
           if (cardKey && sourceMap.has(cardKey)) {
             const { textMap } = sourceMap.get(cardKey);
+            const targetTextShapes = Parser.getTextShapes(targetNode);
+            console.log(`[Sync] target "${cardKey}" text layers:`, targetTextShapes.map(ts => `${ts.name}="${Parser.extractPlainText(ts)}"`));
             const changed = Sync.applyTextMap(targetNode, textMap);
+            console.log(`[Sync] "${cardKey}" — ${changed} layer(s) updated`);
             if (changed > 0) updateCount++;
+          } else {
+            console.log(`[Sync] target "${targetNode.name}" — no source match (cardKey=${cardKey})`);
           }
         }
 
