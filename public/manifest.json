@@ -8,6 +8,7 @@
     "content:read",
     "content:write",
     "allow:downloads",
-    "allow:localstorage"
+    "allow:localstorage",
+    "library:read"
   ]
 }
